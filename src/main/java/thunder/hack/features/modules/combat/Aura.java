@@ -272,15 +272,17 @@ public class Aura extends Module {
     }
 
     private void disableSprint() {
+        // [POLAR BYPASS] - Explicit STOP_SPRINTING packet Polar'da flag yiyor, sadece client-side kapat
         mc.player.setSprinting(false);
         mc.options.sprintKey.setPressed(false);
-        sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.STOP_SPRINTING));
+        // sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.STOP_SPRINTING)); -- POLAR FLAG
     }
 
     private void enableSprint() {
+        // [POLAR BYPASS] - Aynı şekilde START_SPRINTING packet'ı da gönderme
         mc.player.setSprinting(true);
         mc.options.sprintKey.setPressed(true);
-        sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING));
+        // sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING)); -- POLAR FLAG
     }
 
     public void resolvePlayers() {
@@ -315,7 +317,13 @@ public class Aura extends Module {
     }
 
     private int getHitTicks() {
-        return oldDelay.getValue().isEnabled() ? 1 + (int) (20f / random(minCPS.getValue(), maxCPS.getValue())) : (shouldRandomizeDelay() ? (int) MathUtility.random(11, 13) : attackTickLimit.getValue());
+        // [POLAR BYPASS] - Gaussian benzeri varyans ile attack interval check engeli
+        if (oldDelay.getValue().isEnabled()) {
+            return 1 + (int)(20f / random(minCPS.getValue(), maxCPS.getValue()));
+        }
+        int base = shouldRandomizeDelay() ? (int) MathUtility.random(11, 13) : attackTickLimit.getValue();
+        int variance = (int)(random(-2f, 2f));
+        return Math.max(1, base + variance);
     }
 
     @EventHandler
@@ -442,8 +450,12 @@ public class Aura extends Module {
         if (mc.player.fallDistance > 1 && mc.player.fallDistance < 1.14)
             return false;
 
-        if (!reasonForSkipCrit)
-            return !mc.player.isOnGround() && mc.player.fallDistance > (shouldRandomizeFallDistance() ? MathUtility.random(0.15f, 0.7f) : critFallDistance.getValue());
+        if (!reasonForSkipCrit) {
+            // [POLAR BYPASS] - Fall distance'a küçük noise ekle, Polar pattern check engeli
+            float fdNoise = random(0.0f, 0.08f);
+            float targetFd = (shouldRandomizeFallDistance() ? MathUtility.random(0.15f, 0.7f) : critFallDistance.getValue()) + fdNoise;
+            return !mc.player.isOnGround() && mc.player.fallDistance > targetFd;
+        }
         return true;
     }
 
@@ -535,7 +547,10 @@ public class Aura extends Module {
         float delta_yaw = wrapDegrees((float) wrapDegrees(Math.toDegrees(Math.atan2(targetVec.z - mc.player.getZ(), (targetVec.x - mc.player.getX()))) - 90) - rotationYaw) + (wallsBypass.is(WallsBypass.V2) && !ready && !mc.player.canSee(target) ? 20 : 0);
         float delta_pitch = ((float) (-Math.toDegrees(Math.atan2(targetVec.y - (mc.player.getPos().y + mc.player.getEyeHeight(mc.player.getPose())), Math.sqrt(Math.pow((targetVec.x - mc.player.getX()), 2) + Math.pow(targetVec.z - mc.player.getZ(), 2))))) - rotationPitch);
 
-        float yawStep = rotationMode.getValue() != Mode.Track ? 360f : random(minYawStep.getValue(), maxYawStep.getValue());
+        // [POLAR BYPASS] - YawStep noise ile pattern detection engeli
+        float baseYaw = random(minYawStep.getValue(), maxYawStep.getValue());
+        float polarNoise = random(-8f, 8f);
+        float yawStep = rotationMode.getValue() != Mode.Track ? 360f : MathHelper.clamp(baseYaw + polarNoise, 40f, 180f);
         float pitchStep = rotationMode.getValue() != Mode.Track ? 180f : Managers.PLAYER.ticksElytraFlying > 5 ? 180 : (pitchAcceleration + random(-1f, 1f));
 
         if (ready)
@@ -558,7 +573,10 @@ public class Aura extends Module {
         float newYaw = rotationYaw + (delta_yaw > 0 ? deltaYaw : -deltaYaw);
         float newPitch = MathHelper.clamp(rotationPitch + deltaPitch, -90.0F, 90.0F);
 
-        double gcdFix = (Math.pow(mc.options.getMouseSensitivity().getValue() * 0.6 + 0.2, 3.0)) * 1.2;
+        // [POLAR BYPASS] - Güçlendirilmiş GCD fix
+        double sens = mc.options.getMouseSensitivity().getValue();
+        double f = sens * 0.6 + 0.2;
+        double gcdFix = Math.pow(f, 3.0) * (8.0 / 3.0);
 
         if (trackticks > 0 || rotationMode.getValue() == Mode.Track) {
             rotationYaw = (float) (newYaw - (newYaw - rotationYaw) % gcdFix);
@@ -619,11 +637,11 @@ public class Aura extends Module {
 
     public Vec3d getLegitLook(Entity target) {
 
-        float minMotionXZ = 0.003f;
-        float maxMotionXZ = 0.03f;
-
-        float minMotionY = 0.001f;
-        float maxMotionY = 0.03f;
+        // [POLAR BYPASS] - Dinamik motion speed, Polar aim smoothness analizi engeli
+        float minMotionXZ = random(0.001f, 0.004f);
+        float maxMotionXZ = random(0.015f, 0.025f);
+        float minMotionY = random(0.0005f, 0.002f);
+        float maxMotionY = random(0.01f, 0.02f);
 
         double lenghtX = target.getBoundingBox().getLengthX();
         double lenghtY = target.getBoundingBox().getLengthY();
