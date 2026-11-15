@@ -258,6 +258,7 @@ public class ModuleManager implements IManager {
     public static Step step = new Step();
     public static Aura aura = new Aura();
     public static ElytraTarget elytraTarget = new ElytraTarget();
+    public static AutoPotRefill autoPotRefill = new AutoPotRefill();
     public static FOV fov = new FOV();
     public static ESP esp = new ESP();
     public static RPC rpc = new RPC();
