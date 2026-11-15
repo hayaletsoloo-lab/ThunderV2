@@ -22,10 +22,16 @@ public class ElytraTarget extends Module {
     public final Setting<Float>   minRange     = new Setting<>("MinRange",     20f, 1f,  100f);
     public final Setting<Float>   maxRange     = new Setting<>("MaxRange",     100f, 1f, 100f);
     public final Setting<Float>   leadMult     = new Setting<>("LeadMult",     0.7f, 0.1f, 3.0f);
-    public final Setting<Float> delay = new Setting<>("Delay", 5f, 1f, 20f);
+    public final Setting<Float>   delay        = new Setting<>("Delay", 5f, 1f, 20f);
+    public final Setting<Rotations> rotations  = new Setting<>("Rotations", Rotations.Sharp);
+    public final Setting<Float>   smoothFactor = new Setting<>("SmoothFactor", 0.35f, 0.05f, 1.0f, v -> rotations.is(Rotations.Smooth));
+
+    private enum Rotations { Sharp, Smooth }
 
     // ── State ────────────────────────────────────────────────────────────────
     private long lastFireworkMs = 0L;
+    private float smoothYaw   = 0f;
+    private float smoothPitch = 0f;
 
     // Velocity smooth için son 5 tick buffer
     private static final int VEL_SAMPLES = 5;
@@ -40,6 +46,10 @@ public class ElytraTarget extends Module {
     public void onEnable() {
         lastFireworkMs = 0L;
         java.util.Arrays.fill(velHistory, Vec3d.ZERO);
+        if (!fullNullCheck()) {
+            smoothYaw   = mc.player.getYaw();
+            smoothPitch = mc.player.getPitch();
+        }
     }
 
     @EventHandler
@@ -121,12 +131,24 @@ public class ElytraTarget extends Module {
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
         pitch = MathHelper.clamp(pitch, -90f, 90f);
 
-        // ── GCD fix (Polar mouse sensitivity pattern engeli) ─────────────────
-        double sens  = mc.options.getMouseSensitivity().getValue();
-        double f     = sens * 0.6 + 0.2;
-        double gcd   = Math.pow(f, 3.0) * (8.0 / 3.0);
-        float  safeYaw   = (float)(yaw   - (yaw   - mc.player.getYaw())   % gcd);
-        float  safePitch = (float)(pitch - (pitch - mc.player.getPitch()) % gcd);
+        // ── GCD fix ──────────────────────────────────────────────────────────
+        double sens = mc.options.getMouseSensitivity().getValue();
+        double f    = sens * 0.6 + 0.2;
+        double gcd  = Math.pow(f, 3.0) * (8.0 / 3.0);
+
+        float targetYaw, targetPitch;
+        if (rotations.is(Rotations.Smooth)) {
+            smoothYaw   = smoothYaw   + (yaw   - smoothYaw)   * smoothFactor.getValue();
+            smoothPitch = smoothPitch + (pitch - smoothPitch) * smoothFactor.getValue();
+            targetYaw   = smoothYaw;
+            targetPitch = smoothPitch;
+        } else {
+            targetYaw   = yaw;
+            targetPitch = pitch;
+        }
+
+        float safeYaw   = (float)(targetYaw   - (targetYaw   - mc.player.getYaw())   % gcd);
+        float safePitch = (float)(targetPitch - (targetPitch - mc.player.getPitch()) % gcd);
 
         // ── [POLAR BYPASS] Silent fişek ──────────────────────────────────────
         // UpdateSelectedSlot paketi gönderme — sadece PlayerInteractItem spoof
