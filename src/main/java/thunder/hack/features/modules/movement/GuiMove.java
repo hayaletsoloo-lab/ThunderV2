@@ -41,13 +41,15 @@ public class GuiMove extends Module {
         if (clickBypass.is(Bypass.Polar) && polarClickDelay > 0) {
             polarClickDelay--;
             if (polarClickDelay == 0 && !storedClicks.isEmpty()) {
-                // Sprint'i geri al, sonra click'leri gönder
-                if (polarWasSprinting)
-                    mc.player.setSprinting(true);
                 pause.set(true);
                 while (!storedClicks.isEmpty())
                     sendPacket(storedClicks.poll());
                 pause.set(false);
+                // [POLAR BYPASS] Sprint restore — click gittikten sonra sprint geri aç
+                if (polarWasSprinting) {
+                    mc.player.setSprinting(true);
+                    sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING));
+                }
             }
         }
 
@@ -88,10 +90,29 @@ public class GuiMove extends Module {
 
     @EventHandler
     public void onPacketSend(PacketEvent.Send e) {
-        if (!MovementUtility.isMoving() || !mc.options.jumpKey.isPressed() || pause.get())
-            return;
+        if (pause.get()) return;
 
         if (e.getPacket() instanceof ClickSlotC2SPacket click) {
+            // Polar: hareket/jump şartı yok, her zaman intercept et
+            if (clickBypass.is(Bypass.Polar)) {
+                polarWasSprinting = mc.player.isSprinting();
+                if (polarWasSprinting) {
+                    // [POLAR BYPASS] STOP_SPRINTING paketi değil — sadece client-side sprint kapat
+                    // Sonra sunucuya tek bir position paketi ile "duruyorum" dedirt
+                    mc.player.setSprinting(false);
+                    sendPacket(new PlayerMoveC2SPacket.PositionAndOnGround(
+                        mc.player.getX(), mc.player.getY(), mc.player.getZ(), mc.player.isOnGround()
+                    ));
+                }
+                storedClicks.add(click);
+                e.cancel();
+                polarClickDelay = 2 + (int)(Math.random() * 3);
+                return;
+            }
+
+            // Diğer modlar: hareket veya jump şartı
+            if (!MovementUtility.isMoving() && !mc.options.jumpKey.isPressed()) return;
+
             switch (clickBypass.getValue()) {
                 case GrimSwap -> {
                     if (click.getActionType() != SlotActionType.PICKUP && click.getActionType() != SlotActionType.PICKUP_ALL)
@@ -126,22 +147,7 @@ public class GuiMove extends Module {
                     e.cancel();
                 }
 
-                case Polar -> {
-                    // [POLAR BYPASS] Inventory click bypass:
-                    // 1. Sprint'i client-side kapat (paket göndermeden — Polar STOP_SPRINTING flag'liyor)
-                    // 2. Click'i depola
-                    // 3. 2-4 tick random delay sonra gönder (uniform timing Polar pattern check'i tetikliyor)
-                    // 4. CloseHandledScreen gönderme (phantom screen Polar cloud'da flag yiyor)
-                    polarWasSprinting = mc.player.isSprinting();
-                    if (polarWasSprinting) {
-                        mc.player.setSprinting(false);
-                        mc.options.sprintKey.setPressed(false);
-                    }
-                    storedClicks.add(click);
-                    e.cancel();
-                    // Random delay: 2-4 tick
-                    polarClickDelay = 2 + (int)(Math.random() * 3);
-                }
+
             }
         }
 
