@@ -19,12 +19,18 @@ import static thunder.hack.utility.math.MathUtility.random;
 public class ElytraTarget extends Module {
 
     // ── Settings ────────────────────────────────────────────────────────────
-    public final Setting<Float>   range        = new Setting<>("Range",        60f, 20f, 100f);
-    public final Setting<Float>   leadMult     = new Setting<>("LeadMult",     1.2f, 0.5f, 3.0f);
+    public final Setting<Float>   minRange     = new Setting<>("MinRange",     20f, 1f,  100f);
+    public final Setting<Float>   maxRange     = new Setting<>("MaxRange",     100f, 1f, 100f);
+    public final Setting<Float>   leadMult     = new Setting<>("LeadMult",     0.7f, 0.1f, 3.0f);
     public final Setting<Float> delay = new Setting<>("Delay", 5f, 1f, 20f);
 
     // ── State ────────────────────────────────────────────────────────────────
     private long lastFireworkMs = 0L;
+
+    // Velocity smooth için son 5 tick buffer
+    private static final int VEL_SAMPLES = 5;
+    private final Vec3d[] velHistory = new Vec3d[VEL_SAMPLES];
+    private int velIndex = 0;
 
     public ElytraTarget() {
         super("ElytraTarget", Category.MOVEMENT);
@@ -33,6 +39,7 @@ public class ElytraTarget extends Module {
     @Override
     public void onEnable() {
         lastFireworkMs = 0L;
+        java.util.Arrays.fill(velHistory, Vec3d.ZERO);
     }
 
     @EventHandler
@@ -45,8 +52,9 @@ public class ElytraTarget extends Module {
         var target = ModuleManager.aura.target;
         if (!(target instanceof PlayerEntity)) return;
 
-        // Range check
-        if (mc.player.distanceTo(target) > range.getValue()) return;
+        // Range check — min ve max arası hedef
+        double dist = mc.player.distanceTo(target);
+        if (dist < minRange.getValue() || dist > maxRange.getValue()) return;
 
         // Delay check (ms bazlı)
         long now = System.currentTimeMillis();
@@ -56,21 +64,55 @@ public class ElytraTarget extends Module {
         int fireworkSlot = findFireworkSlot();
         if (fireworkSlot == -1) return;
 
-        // ── Predictive lead point ────────────────────────────────────────────
-        // Firework hızı yaklaşık 1.6 blok/tick, travel time tahmin
-        double dist        = mc.player.distanceTo(target);
-        double travelTicks = dist / 1.6;
-        Vec3d  vel         = target.getVelocity();
+        // ── Velocity smooth (son 5 tick ortalaması) ──────────────────────────
+        velHistory[velIndex % VEL_SAMPLES] = target.getVelocity();
+        velIndex++;
+        double svx = 0, svy = 0, svz = 0;
+        int count = 0;
+        for (Vec3d v : velHistory) {
+            if (v == null) continue;
+            svx += v.x; svy += v.y; svz += v.z;
+            count++;
+        }
+        if (count == 0) return;
+        Vec3d smoothVel = new Vec3d(svx / count, svy / count, svz / count);
 
-        // Hedefin bir sonraki N tick'teki pozisyonu (önüne geç)
-        Vec3d leadPos = target.getEyePos().add(
-            vel.x * travelTicks * leadMult.getValue(),
-            vel.y * travelTicks * leadMult.getValue(),
-            vel.z * travelTicks * leadMult.getValue()
+        // ── Bounding box merkezi (eye pos yerine) ────────────────────────────
+        Vec3d targetCenter = target.getBoundingBox().getCenter();
+
+        // ── İteratif travel time simülasyonu ─────────────────────────────────
+        // Fişeğin başlangıç hızı: bizim velocity + yön * 1.6
+        Vec3d eyePos   = mc.player.getEyePos();
+        Vec3d toTarget = targetCenter.subtract(eyePos).normalize();
+        Vec3d fwVel    = mc.player.getVelocity();
+        // Fişek başlangıç hızı: player velocity + yön * fişek boost hızı
+        double fwSpeed = 1.6;
+        Vec3d fwVelVec = new Vec3d(
+            fwVel.x + toTarget.x * fwSpeed,
+            fwVel.y + toTarget.y * fwSpeed,
+            fwVel.z + toTarget.z * fwSpeed
         );
 
+        // 3 iterasyon: lead tahminini kendi üzerine uygula
+        Vec3d leadPos = targetCenter;
+        for (int iter = 0; iter < 3; iter++) {
+            double dx0 = leadPos.x - eyePos.x;
+            double dy0 = leadPos.y - eyePos.y;
+            double dz0 = leadPos.z - eyePos.z;
+            double d0  = Math.sqrt(dx0*dx0 + dy0*dy0 + dz0*dz0);
+            // Travel time: mesafe / fişeğin o yöndeki hız bileşeni
+            double speed = fwVelVec.length();
+            if (speed < 0.01) speed = fwSpeed;
+            double travelTicks = d0 / speed;
+
+            leadPos = targetCenter.add(
+                smoothVel.x * travelTicks * leadMult.getValue(),
+                smoothVel.y * travelTicks * leadMult.getValue(),
+                smoothVel.z * travelTicks * leadMult.getValue()
+            );
+        }
+
         // ── Rotation hesapla (lead point'e) ─────────────────────────────────
-        Vec3d eyePos = mc.player.getEyePos();
         double dx = leadPos.x - eyePos.x;
         double dy = leadPos.y - eyePos.y;
         double dz = leadPos.z - eyePos.z;
