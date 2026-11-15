@@ -35,6 +35,7 @@ public class Velocity extends Module {
     public Setting<Float> vertical = new Setting<>("Vertical", 0.0f, 0.0f, 100.0f, v -> mode.getValue() == modeEn.Custom);
     private final Setting<jumpModeEn> jumpMode = new Setting<>("JumpMode", jumpModeEn.Jump, v -> mode.getValue() == modeEn.Jump);
     public Setting<Float> horizontal = new Setting<>("Horizontal", 0.0f, 0.0f, 100.0f, v -> mode.getValue() == modeEn.Custom || mode.getValue() == modeEn.Jump);
+    public Setting<Float> polarReduce = new Setting<>("PolarReduce", 35f, 0f, 100f, v -> mode.getValue() == modeEn.Polar);
     public Setting<Float> motion = new Setting<>("Motion", .42f, 0.4f, 0.5f, v -> mode.getValue() == modeEn.Jump);
     public Setting<Boolean> fail = new Setting<>("SmartFail", true, v -> mode.getValue() == modeEn.Jump);
     public Setting<Float> failRate = new Setting<>("FailRate", 0.3f, 0.0f, 1.0f, v -> mode.getValue() == modeEn.Jump && fail.getValue());
@@ -104,6 +105,23 @@ public class Velocity extends Module {
                         e.cancel();
                         flag = true;
                     }
+                    case Polar -> {
+                        // [POLAR BYPASS] Velocity:
+                        // - Cancel/skip pattern Polar'da hemen flag'leniyor
+                        // - Velocity'yi tamamen sıfırlama; yönü koru, miktarı reduce et
+                        // - Y eksenini olduğu gibi bırak (tamamen sıfırlamak Polar cloud'da anormal görünüyor)
+                        // - Horizontal'ı reduce et, hareket yönüne göre redirect ekle
+                        float reduce = polarReduce.getValue() / 100f;
+                        double[] dir = MovementUtility.forward(1.0);
+
+                        // Knockback yönünü kısmen hareket yönüne çevir
+                        double vX = pac.getVelocityX() * reduce + dir[0] * (1f - reduce) * 0.3;
+                        double vZ = pac.getVelocityZ() * reduce + dir[1] * (1f - reduce) * 0.3;
+
+                        ((ISPacketEntityVelocity) pac).setMotionX((int) vX);
+                        ((ISPacketEntityVelocity) pac).setMotionY((int) (pac.getVelocityY() * 0.6)); // Y'yi tamamen sıfırlama
+                        ((ISPacketEntityVelocity) pac).setMotionZ((int) vZ);
+                    }
                 }
             }
         }
@@ -126,6 +144,12 @@ public class Velocity extends Module {
                     ((IExplosionS2CPacket) explosion).setMotionY(0);
                     ((IExplosionS2CPacket) explosion).setMotionZ(0);
                     flag = true;
+                }
+                case Polar -> {
+                    float reduce = polarReduce.getValue() / 100f;
+                    ((IExplosionS2CPacket) explosion).setMotionX(((IExplosionS2CPacket) explosion).getMotionX() * reduce);
+                    ((IExplosionS2CPacket) explosion).setMotionY(((IExplosionS2CPacket) explosion).getMotionY() * reduce);
+                    ((IExplosionS2CPacket) explosion).setMotionZ(((IExplosionS2CPacket) explosion).getMotionZ() * reduce);
                 }
             }
         }
@@ -200,6 +224,15 @@ public class Velocity extends Module {
                     flag = false;
                 }
             }
+            case Polar -> {
+                // [POLAR BYPASS] hurtTime'da sprint toggle — velocity reduce'u maskelemek için
+                // Polar sprint state değişimini velocity ile ilişkilendirir; bunu bozuyoruz
+                if (mc.player.hurtTime == 9) {
+                    mc.player.setSprinting(false);
+                } else if (mc.player.hurtTime == 7) {
+                    mc.player.setSprinting(true);
+                }
+            }
         }
         if (grimTicks > 0)
             grimTicks--;
@@ -215,7 +248,7 @@ public class Velocity extends Module {
     }
 
     public enum modeEn {
-        Matrix, Cancel, Sunrise, Custom, Redirect, OldGrim, Jump, GrimNew
+        Matrix, Cancel, Sunrise, Custom, Redirect, OldGrim, Jump, GrimNew, Polar
     }
 
     public enum jumpModeEn {
