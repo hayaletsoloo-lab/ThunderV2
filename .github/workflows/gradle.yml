@@ -34,9 +34,9 @@ jobs:
         run: rm ./build/libs/*-sources.jar || true
 
       - uses: softprops/action-gh-release@v1
-  with:
-    repo_token: "${{ secrets.GITHUB_TOKEN }}"
-    automatic_release_tag: "latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
           prerelease: false
           title: "Latest Build (1.21)"
           files: |
