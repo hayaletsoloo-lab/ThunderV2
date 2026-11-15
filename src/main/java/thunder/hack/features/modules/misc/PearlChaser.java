@@ -42,6 +42,14 @@ public class PearlChaser extends Module {
         super("PearlChaser", Category.MISC);
     }
 
+    @Override
+    public void onEnable() {
+        if (!fullNullCheck()) {
+            smoothYaw   = mc.player.getYaw();
+            smoothPitch = mc.player.getPitch();
+        }
+    }
+
     private final Setting<BooleanSettingGroup> stopMotion = new Setting<>("StopMotion", new BooleanSettingGroup(false));
     private final Setting<Boolean> legitStop = new Setting<>("LegitStop", false).addToGroup(stopMotion);
     private final Setting<Boolean> pauseAura = new Setting<>("PauseAura", false);
@@ -55,6 +63,11 @@ public class PearlChaser extends Module {
     private int lastPearlId;
     private int lastOurPearlId;
     private HashMap<PlayerEntity, Long> targets = new HashMap<>();
+
+    // [POLAR BYPASS] state
+    private float smoothYaw;
+    private float smoothPitch;
+    private static final float SMOOTH_FACTOR = 0.35f; // her tick'te hedefe bu kadar yaklaş
 
     @EventHandler
     public void onEntitySpawn(EventEntitySpawn e) {
@@ -145,26 +158,45 @@ public class PearlChaser extends Module {
                 ("Догоняем перл! Позиция X:" + tracedBP.getX() + " Y:" + tracedBP.getY() + " Z:" + tracedBP.getZ() + " Углы Y:" + rotationYaw + " P:" + rotationPitch) :
                 ("Chasing pearl on X:" + tracedBP.getX() + " Y:" + tracedBP.getY() + " Z:" + tracedBP.getZ() + " Angle Y:" + rotationYaw + " P:" + rotationPitch));
 
-        mc.player.setYaw(rotationYaw);
-        mc.player.setPitch(MathUtility.clamp(rotationPitch, -89, 89));
+        // [POLAR BYPASS] Rotation smooth — anlık snap yerine kademeli yaklaşım
+        // Polar anlık yaw/pitch değişimini pattern olarak görüyor
+        float clampedPitch = MathUtility.clamp(rotationPitch, -89, 89);
+        smoothYaw   = smoothYaw   + (rotationYaw   - smoothYaw)   * SMOOTH_FACTOR;
+        smoothPitch = smoothPitch + (clampedPitch  - smoothPitch) * SMOOTH_FACTOR;
 
-        float yaw = mc.player.getYaw();
-        float pitch = mc.player.getPitch();
+        // GCD fix
+        double sens = mc.options.getMouseSensitivity().getValue();
+        double f    = sens * 0.6 + 0.2;
+        double gcd  = Math.pow(f, 3.0) * (8.0 / 3.0);
+        float safeYaw   = (float)(smoothYaw   - (smoothYaw   - mc.player.getYaw())   % gcd);
+        float safePitch = (float)(smoothPitch - (smoothPitch - mc.player.getPitch()) % gcd);
+
+        mc.player.setYaw(safeYaw);
+        mc.player.setPitch(safePitch);
+
+        final float finalYaw   = safeYaw;
+        final float finalPitch = safePitch;
 
         postSyncAction = () -> {
             int epSlot = findEPSlot();
             int originalSlot = mc.player.getInventory().selectedSlot;
             if (epSlot != -1) {
+                // [POLAR BYPASS] Slot switch: UpdateSelectedSlot → interact → delayed restore
+                // Anlık switch-restore Polar slot velocity check'ini flag'liyor
                 mc.player.getInventory().selectedSlot = epSlot;
                 sendPacket(new UpdateSelectedSlotC2SPacket(epSlot));
-                sendSequencedPacket(id -> new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, id, yaw, pitch));
+                sendSequencedPacket(id -> new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, id, finalYaw, finalPitch));
                 sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
                 mc.player.getInventory().selectedSlot = originalSlot;
-                sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot));
+                // [POLAR BYPASS] Restore'u bir tick sonraya bırak — mc.execute ile defer
+                mc.execute(() -> sendPacket(new UpdateSelectedSlotC2SPacket(originalSlot)));
             }
         };
 
         targetBlock = null;
+        // [POLAR BYPASS] Delay jitter — sabit 1000ms Polar pattern check'ini tetikliyor
+        // delayTimer.reset() yeterli, timer passedMs değerini dışarıdan değiştiremiyoruz
+        // ama bir sonraki atış için küçük rastgele offset eklenebilir
         delayTimer.reset();
     }
 
