@@ -159,6 +159,11 @@ public class Aura extends Module {
     private int trackticks;
     private boolean lookingAtHitbox;
 
+    // [POLAR BYPASS] ShieldBreaker tick-spread state
+    private int shieldBreakerPendingSlot = -1;
+    private int shieldBreakerRestoreSlot = -1;
+    private int shieldBreakerDelayTick = 0;
+
     private final Timer delayTimer = new Timer();
     private final Timer pauseTimer = new Timer();
 
@@ -411,6 +416,9 @@ public class Aura extends Module {
         rotationYaw = mc.player.getYaw();
         rotationPitch = mc.player.getPitch();
         delayTimer.reset();
+        shieldBreakerPendingSlot = -1;
+        shieldBreakerRestoreSlot = -1;
+        shieldBreakerDelayTick = 0;
     }
 
     private boolean autoCrit() {
@@ -459,29 +467,62 @@ public class Aura extends Module {
         return true;
     }
 
+    // [POLAR BYPASS] ShieldBreaker - tick-spread slot switch, no phantom CloseHandledScreen
     private boolean shieldBreaker(boolean instant) { //todo - Actual value of parameter 'instant' is always 'false'
+        // Pending restore: hotbar slot restore'u bir tick sonraya yay
+        if (shieldBreakerPendingSlot != -1) {
+            if (shieldBreakerDelayTick-- <= 0) {
+                sendPacket(new UpdateSelectedSlotC2SPacket(shieldBreakerRestoreSlot));
+                shieldBreakerPendingSlot = -1;
+                shieldBreakerRestoreSlot = -1;
+            }
+            return true;
+        }
+
         int axeSlot = InventoryUtility.getAxe().slot();
         if (axeSlot == -1) return false;
         if (!shieldBreaker.getValue()) return false;
         if (!(target instanceof PlayerEntity)) return false;
         if (!((PlayerEntity) target).isUsingItem() && !instant) return false;
-        if (((PlayerEntity) target).getOffHandStack().getItem() != Items.SHIELD && ((PlayerEntity) target).getMainHandStack().getItem() != Items.SHIELD)
+        if (((PlayerEntity) target).getOffHandStack().getItem() != Items.SHIELD
+                && ((PlayerEntity) target).getMainHandStack().getItem() != Items.SHIELD)
             return false;
 
+        int currentSlot = mc.player.getInventory().selectedSlot;
+
         if (axeSlot >= 9) {
-            mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, axeSlot, mc.player.getInventory().selectedSlot, SlotActionType.SWAP, mc.player);
-            sendPacket(new CloseHandledScreenC2SPacket(mc.player.currentScreenHandler.syncId));
+            // Inventory axe: clickSlot ile silent switch, CloseHandledScreen YOK
+            // [POLAR BYPASS] CloseHandledScreen kaldırıldı - phantom screen packet Polar cloud'da flag yiyor
+            mc.interactionManager.clickSlot(
+                mc.player.currentScreenHandler.syncId,
+                axeSlot,
+                currentSlot,
+                SlotActionType.SWAP,
+                mc.player
+            );
             mc.interactionManager.attackEntity(mc.player, target);
             swingHand();
-            mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, axeSlot, mc.player.getInventory().selectedSlot, SlotActionType.SWAP, mc.player);
-            sendPacket(new CloseHandledScreenC2SPacket(mc.player.currentScreenHandler.syncId));
+            mc.interactionManager.clickSlot(
+                mc.player.currentScreenHandler.syncId,
+                axeSlot,
+                currentSlot,
+                SlotActionType.SWAP,
+                mc.player
+            );
         } else {
+            // Hotbar axe: switch → attack → delayed restore
             sendPacket(new UpdateSelectedSlotC2SPacket(axeSlot));
             mc.interactionManager.attackEntity(mc.player, target);
             swingHand();
-            sendPacket(new UpdateSelectedSlotC2SPacket(mc.player.getInventory().selectedSlot));
+
+            // [POLAR BYPASS] Restore'u bir sonraki tick'e taşı, anlık switch-restore Polar slot velocity check'ini flag'liyor
+            shieldBreakerPendingSlot = axeSlot;
+            shieldBreakerRestoreSlot = currentSlot;
+            shieldBreakerDelayTick = (int) random(1, 2);
         }
-        hitTicks = 10;
+
+        // [POLAR BYPASS] hitTicks jitter - sabit 10 Polar tarafından pattern olarak görülüyor
+        hitTicks = (int) random(9, 12);
         return true;
     }
 
