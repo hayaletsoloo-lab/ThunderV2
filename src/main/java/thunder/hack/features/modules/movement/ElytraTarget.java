@@ -1,33 +1,36 @@
-package thunder.hack.features.modules.combat;
+package polar.ware.features.modules.movement;
 
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.FireworkRocketItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
-import thunder.hack.events.impl.PlayerUpdateEvent;
-import thunder.hack.features.modules.Module;
-import thunder.hack.core.manager.client.ModuleManager;
-import thunder.hack.setting.Setting;
-
-import static thunder.hack.utility.math.MathUtility.random;
+import polar.ware.core.manager.client.ModuleManager;
+import polar.ware.events.impl.EventSync;
+import polar.ware.features.modules.Module;
+import polar.ware.setting.Setting;
 
 public class ElytraTarget extends Module {
 
+    // ── Settings ─────────────────────────────────────────────────────────────
+    public final Setting<Float>   minRange     = new Setting<>("MinRange",     20f,  1f,   100f);
+    public final Setting<Float>   maxRange     = new Setting<>("MaxRange",     100f, 1f,   100f);
     public final Setting<Float>   leadMult     = new Setting<>("LeadMult",     0.7f, 0.1f, 3.0f);
     public final Setting<Float>   delay        = new Setting<>("Delay",        5f,   1f,   20f);
     public final Setting<Rotations> rotations  = new Setting<>("Rotations",    Rotations.Sharp);
-    public final Setting<Float>   smoothFactor = new Setting<>("SmoothFactor", 0.35f, 0.05f, 1.0f,
-                                                     v -> rotations.is(Rotations.Smooth));
+    public final Setting<Float>   smoothFactor = new Setting<>("SmoothFactor", 0.35f, 0.05f, 1.0f, v -> rotations.is(Rotations.Smooth));
 
     private enum Rotations { Sharp, Smooth }
 
-    private long    lastFireworkMs = 0L;
-    private float   smoothYaw      = 0f;
-    private float   smoothPitch    = 0f;
+    // ── State ─────────────────────────────────────────────────────────────────
+    private long   lastFireworkMs = 0L;
+    private float  smoothYaw      = 0f;
+    private float  smoothPitch    = 0f;
 
     private static final int VEL_SAMPLES = 5;
     private final Vec3d[] velHistory = new Vec3d[VEL_SAMPLES];
@@ -48,21 +51,28 @@ public class ElytraTarget extends Module {
     }
 
     @EventHandler
-    public void onUpdate(PlayerUpdateEvent e) {
+    public void onSync(EventSync e) {
         if (fullNullCheck()) return;
         if (!mc.player.isFallFlying()) return;
 
-        if (ModuleManager.aura == null || !ModuleManager.aura.isEnabled()) return;
+        // Aura'nın hedefini al (PolarWare: Aura.target static)
         var target = ModuleManager.aura.target;
         if (!(target instanceof PlayerEntity)) return;
+        if (!ModuleManager.aura.isEnabled()) return;
 
+        // Range check
+        double dist = mc.player.distanceTo(target);
+        if (dist < minRange.getValue() || dist > maxRange.getValue()) return;
+
+        // Delay check
         long now = System.currentTimeMillis();
         if (now - lastFireworkMs < (long)(delay.getValue() * 100)) return;
 
+        // Fişek bul
         int fireworkSlot = findFireworkSlot();
         if (fireworkSlot == -1) return;
 
-        // ── Velocity smooth ──────────────────────────────────────────────────
+        // ── Velocity smooth ───────────────────────────────────────────────────
         velHistory[velIndex % VEL_SAMPLES] = target.getVelocity();
         velIndex++;
         double svx = 0, svy = 0, svz = 0;
@@ -75,11 +85,11 @@ public class ElytraTarget extends Module {
         if (count == 0) return;
         Vec3d smoothVel = new Vec3d(svx / count, svy / count, svz / count);
 
-        // ── Lead simülasyonu ─────────────────────────────────────────────────
-        Vec3d eyePos       = mc.player.getEyePos();
+        // ── Bounding box merkezi ──────────────────────────────────────────────
         Vec3d targetCenter = target.getBoundingBox().getCenter();
-        Vec3d fwVel        = mc.player.getVelocity();
+        Vec3d eyePos       = mc.player.getEyePos();
         Vec3d toTarget     = targetCenter.subtract(eyePos).normalize();
+        Vec3d fwVel        = mc.player.getVelocity();
         double fwSpeed     = 1.6;
         Vec3d fwVelVec     = new Vec3d(
             fwVel.x + toTarget.x * fwSpeed,
@@ -87,6 +97,7 @@ public class ElytraTarget extends Module {
             fwVel.z + toTarget.z * fwSpeed
         );
 
+        // ── İteratif lead ─────────────────────────────────────────────────────
         Vec3d leadPos = targetCenter;
         for (int iter = 0; iter < 3; iter++) {
             double dx0 = leadPos.x - eyePos.x;
@@ -96,7 +107,6 @@ public class ElytraTarget extends Module {
             double speed = fwVelVec.length();
             if (speed < 0.01) speed = fwSpeed;
             double travelTicks = d0 / speed;
-
             leadPos = targetCenter.add(
                 smoothVel.x * travelTicks * leadMult.getValue(),
                 smoothVel.y * travelTicks * leadMult.getValue(),
@@ -104,15 +114,18 @@ public class ElytraTarget extends Module {
             );
         }
 
-        // ── Rotation ─────────────────────────────────────────────────────────
+        // ── Rotation ──────────────────────────────────────────────────────────
         double dx = leadPos.x - eyePos.x;
         double dy = leadPos.y - eyePos.y;
         double dz = leadPos.z - eyePos.z;
 
         float yaw   = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90f;
-        float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx*dx + dz*dz)));
-        pitch = MathHelper.clamp(pitch, -90f, 90f);
+        float pitch = MathHelper.clamp(
+            (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx*dx + dz*dz))),
+            -90f, 90f
+        );
 
+        // GCD fix
         double sens = mc.options.getMouseSensitivity().getValue();
         double f    = sens * 0.6 + 0.2;
         double gcd  = Math.pow(f, 3.0) * (8.0 / 3.0);
@@ -131,27 +144,29 @@ public class ElytraTarget extends Module {
         float safeYaw   = (float)(targetYaw   - (targetYaw   - mc.player.getYaw())   % gcd);
         float safePitch = (float)(targetPitch - (targetPitch - mc.player.getPitch()) % gcd);
 
-        // ── Silent fişek (Polar bypass) ──────────────────────────────────────
+        // ── [POLAR BYPASS] Silent fişek ───────────────────────────────────────
         if (fireworkSlot < 9) {
-            int prev = mc.player.getInventory().selectedSlot;
-            mc.player.getInventory().selectedSlot = fireworkSlot;
+            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(fireworkSlot));
             sendSequencedPacket(id -> new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, id, safeYaw, safePitch));
-            mc.player.getInventory().selectedSlot = prev;
+            final int prevSlot = mc.player.getInventory().selectedSlot;
+            mc.execute(() -> mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(prevSlot)));
         } else {
-            int hotbarSlot = mc.player.getInventory().selectedSlot;
             mc.interactionManager.clickSlot(
                 mc.player.currentScreenHandler.syncId,
-                fireworkSlot, hotbarSlot,
-                net.minecraft.screen.slot.SlotActionType.SWAP,
+                fireworkSlot,
+                mc.player.getInventory().selectedSlot,
+                SlotActionType.SWAP,
                 mc.player
             );
             sendSequencedPacket(id -> new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, id, safeYaw, safePitch));
             mc.interactionManager.clickSlot(
                 mc.player.currentScreenHandler.syncId,
-                fireworkSlot, hotbarSlot,
-                net.minecraft.screen.slot.SlotActionType.SWAP,
+                fireworkSlot,
+                mc.player.getInventory().selectedSlot,
+                SlotActionType.SWAP,
                 mc.player
             );
+            // CloseHandledScreen kasıtlı gönderilmiyor
         }
 
         lastFireworkMs = System.currentTimeMillis();
